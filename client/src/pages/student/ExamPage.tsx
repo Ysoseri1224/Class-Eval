@@ -4,7 +4,7 @@ import { sessionApi, questionApi, submissionApi } from '../../api'
 import type { Session, Question, QuestionSet } from '../../types'
 
 const TYPE_LABELS: Record<string, string> = {
-  choice: '选择题', judge: '判断题', fill: '填空题'
+  choice: '选择题', judge: '判断题', fill: '填空题', match: '连线题'
 }
 
 export default function ExamPage() {
@@ -78,6 +78,27 @@ export default function ExamPage() {
   }, [selectedSession, submitted, submitting, answers])
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
+
+  // 连线题：当前选中的左侧项
+  const [matchSelected, setMatchSelected] = useState<Record<number, string | null>>({})
+
+  const handleMatchLeft = (qId: number, leftId: string) => {
+    setMatchSelected(prev => ({ ...prev, [qId]: prev[qId] === leftId ? null : leftId }))
+  }
+
+  const handleMatchRight = (qId: number, rightId: string) => {
+    const leftId = matchSelected[qId]
+    if (!leftId) return
+    const newAns = { ...(answers[qId] || {}), [leftId]: rightId }
+    setMatchSelected(prev => ({ ...prev, [qId]: null }))
+    setAnswer(qId, newAns)
+  }
+
+  const clearMatchPair = (qId: number, leftId: string) => {
+    const newAns = { ...(answers[qId] || {}) }
+    delete newAns[leftId]
+    setAnswer(qId, newAns)
+  }
 
   // 渲染单道题
   const renderQuestion = (q: Question, idx: number) => {
@@ -160,6 +181,111 @@ export default function ExamPage() {
             )}
           </div>
         )}
+
+        {/* 连线题 */}
+        {q.type === 'match' && (() => {
+          const opts = q.options as { left: {id:string;text:string;image?:string}[]; right: {id:string;text:string;image?:string}[] }
+          if (!opts?.left) return null
+          const userAns: Record<string,string> = ans || {}
+          const correctAns: Record<string,string> = result?.correctAnswer || {}
+          const selectedLeft = matchSelected[q.id] || null
+
+          const COLORS = ['blue','green','purple','orange','pink','teal']
+          const colorMap: Record<string,string> = {}
+          opts.left.forEach((l,i) => { if (userAns[l.id]) colorMap[l.id] = COLORS[i % COLORS.length] })
+
+          const clsMap: Record<string,{bg:string;border:string;text:string}> = {
+            blue:  {bg:'bg-blue-100',  border:'border-blue-400',  text:'text-blue-700'},
+            green: {bg:'bg-green-100', border:'border-green-400', text:'text-green-700'},
+            purple:{bg:'bg-purple-100',border:'border-purple-400',text:'text-purple-700'},
+            orange:{bg:'bg-orange-100',border:'border-orange-400',text:'text-orange-700'},
+            pink:  {bg:'bg-pink-100',  border:'border-pink-400',  text:'text-pink-700'},
+            teal:  {bg:'bg-teal-100',  border:'border-teal-400',  text:'text-teal-700'},
+          }
+
+          return (
+            <div className="ml-6">
+              {!submitted && (
+                <p className="text-xs text-blue-500 mb-2">
+                  {selectedLeft ? '再点右侧项完成配对 （再次点击左侧项可取消）' : '点击左侧项，再点右侧项完成配对'}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  {opts.left.map(l => {
+                    const paired = userAns[l.id]
+                    const color = colorMap[l.id]
+                    const cls = color ? clsMap[color] : null
+                    const isSelected = selectedLeft === l.id
+                    const isCorrect = submitted && correctAns[l.id] && userAns[l.id] === correctAns[l.id]
+                    const isWrong = submitted && userAns[l.id] && userAns[l.id] !== correctAns[l.id]
+                    return (
+                      <div key={l.id}
+                        onClick={() => !submitted && handleMatchLeft(q.id, l.id)}
+                        className={`flex items-center gap-2 p-2.5 rounded-lg border-2 transition-all
+                          ${submitted
+                            ? isCorrect ? 'border-green-400 bg-green-50'
+                              : isWrong  ? 'border-red-400 bg-red-50'
+                              : 'border-gray-200 bg-white'
+                            : isSelected ? 'border-blue-500 bg-blue-100 ring-2 ring-blue-300'
+                              : cls ? `${cls.bg} ${cls.border}`
+                              : 'border-gray-200 bg-white hover:bg-gray-50'
+                          }
+                          ${!submitted ? 'cursor-pointer' : ''}
+                        `}
+                      >
+                        {l.image && <img src={l.image} alt="" className="h-10 w-10 object-contain rounded shrink-0" />}
+                        <span className="text-sm flex-1">{l.text}</span>
+                        {paired && !submitted && (
+                          <button className="text-gray-400 hover:text-red-500 text-xs shrink-0" onClick={e => { e.stopPropagation(); clearMatchPair(q.id, l.id) }}>×</button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="space-y-2">
+                  {opts.right.map(r => {
+                    const pairedLeftId = Object.keys(userAns).find(k => userAns[k] === r.id)
+                    const color = pairedLeftId ? colorMap[pairedLeftId] : null
+                    const cls = color ? clsMap[color] : null
+                    const isCorrect = submitted && Object.entries(correctAns).some(([lId, rId]) => rId === r.id && userAns[lId] === rId)
+                    const isWrong = submitted && pairedLeftId && userAns[pairedLeftId] !== correctAns[pairedLeftId]
+                    return (
+                      <div key={r.id}
+                        onClick={() => !submitted && handleMatchRight(q.id, r.id)}
+                        className={`flex items-center gap-2 p-2.5 rounded-lg border-2 transition-all
+                          ${submitted
+                            ? isCorrect ? 'border-green-400 bg-green-50'
+                              : isWrong  ? 'border-red-400 bg-red-50'
+                              : 'border-gray-200 bg-white'
+                            : cls ? `${cls.bg} ${cls.border}`
+                              : selectedLeft ? 'border-gray-200 bg-white hover:border-blue-400 hover:bg-blue-50 cursor-pointer'
+                              : 'border-gray-200 bg-white'
+                          }
+                        `}
+                      >
+                        {r.image && <img src={r.image} alt="" className="h-10 w-10 object-contain rounded shrink-0" />}
+                        <span className="text-sm flex-1">{r.text}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              {submitted && !result?.correct && (
+                <div className="mt-3 p-2.5 bg-green-50 rounded-lg border border-green-200">
+                  <p className="text-xs font-semibold text-green-700 mb-1">✓ 正确配对：</p>
+                  {Object.entries(correctAns).map(([lId, rId]) => {
+                    const lItem = opts.left.find(l => l.id === lId)
+                    const rItem = opts.right.find(r => r.id === rId)
+                    return lItem && rItem ? (
+                      <p key={lId} className="text-xs text-green-600">{lItem.text} → {rItem.text}</p>
+                    ) : null
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
       </div>
     )

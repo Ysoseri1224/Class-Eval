@@ -26,7 +26,7 @@ export interface Student extends User {
   class_name?: string
 }
 
-export type QuestionType = 'choice' | 'judge' | 'fill'
+export type QuestionType = 'choice' | 'judge' | 'fill' | 'match'
 
 export interface Question {
   id: number

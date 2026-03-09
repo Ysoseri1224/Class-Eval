@@ -2,10 +2,17 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import { questionApi } from '../../api'
 import Modal from '../../components/Modal'
+import MatchQuestionEditor from '../../components/MatchQuestionEditor'
+import type { MatchOptions } from '../../components/MatchQuestionEditor'
 import type { QuestionSet, Question, QuestionType } from '../../types'
 
-const TYPE_LABELS: Record<QuestionType, string> = {
-  choice: '选择题', judge: '判断题', fill: '填空题'
+const TYPE_LABELS: Record<string, string> = {
+  choice: '选择题', judge: '判断题', fill: '填空题', match: '连线题'
+}
+
+const DEFAULT_MATCH_OPTIONS: MatchOptions = {
+  left: [{ id: 'L1', text: '' }, { id: 'L2', text: '' }],
+  right: [{ id: 'R1', text: '' }, { id: 'R2', text: '' }]
 }
 
 export default function QuestionManage() {
@@ -78,6 +85,16 @@ export default function QuestionManage() {
     setQModal(true)
   }
 
+  const handleTypeChange = (newType: string) => {
+    if (newType === 'match') {
+      setEditQ(p => ({ ...p, type: newType as QuestionType, options: DEFAULT_MATCH_OPTIONS, answer: {} }))
+    } else if (newType === 'choice') {
+      setEditQ(p => ({ ...p, type: newType as QuestionType, options: ['', '', '', ''], answer: '' }))
+    } else {
+      setEditQ(p => ({ ...p, type: newType as QuestionType, options: undefined, answer: '' }))
+    }
+  }
+
   const openEditQ = (q: Question) => {
     setEditQ({ ...q })
     setCurrentSetId(q.set_id)
@@ -93,7 +110,12 @@ export default function QuestionManage() {
 
   const handleSaveQ = async () => {
     if (!editQ?.content?.trim()) return setQError('题目内容不能为空')
-    if (editQ.answer === undefined || editQ.answer === '') return setQError('答案不能为空')
+    if (editQ.type === 'match') {
+      const ans = editQ.answer as Record<string, string>
+      if (!ans || Object.keys(ans).length === 0) return setQError('请至少配对一组连线答案')
+    } else {
+      if (editQ.answer === undefined || editQ.answer === '') return setQError('答案不能为空')
+    }
     try {
       if (editQ.id) {
         await questionApi.updateQuestion(editQ.id, editQ)
@@ -223,7 +245,7 @@ export default function QuestionManage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">题目类型</label>
-                <select className="input" value={editQ.type || 'choice'} onChange={e => setEditQ(p => ({ ...p, type: e.target.value as QuestionType, options: e.target.value === 'choice' ? ['', '', '', ''] : undefined, answer: '' }))}>
+                <select className="input" value={editQ.type || 'choice'} onChange={e => handleTypeChange(e.target.value)}>
                   {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
@@ -273,6 +295,18 @@ export default function QuestionManage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">参考答案</label>
                 <input className="input" value={editQ.answer as string || ''} onChange={e => setEditQ(p => ({ ...p, answer: e.target.value }))} placeholder="请输入参考答案" />
+              </div>
+            )}
+
+            {/* 连线题 */}
+            {editQ.type === 'match' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">连线题内容与配对</label>
+                <MatchQuestionEditor
+                  options={(editQ.options as MatchOptions) || DEFAULT_MATCH_OPTIONS}
+                  answer={(editQ.answer as Record<string, string>) || {}}
+                  onChange={(opts, ans) => setEditQ(p => ({ ...p, options: opts, answer: ans }))}
+                />
               </div>
             )}
 
