@@ -1,0 +1,50 @@
+{
+  "name": "classroom-eval",
+  "version": "1.0.0",
+  "description": "课堂评测系统",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "electron": "^36.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.zxz.classroom-eval",
+    "productName": "课堂评测系统",
+    "asar": false,
+    "directories": {
+      "output": "dist-exe"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": true
+    },
+    "files": [
+      "main.js",
+      "splash.html",
+      "icon.ico",
+      "server/src/**/*",
+      "server/package.json",
+      "client-dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "server/node_modules",
+        "to": "server_modules"
+      }
+    ]
+  }
+}
