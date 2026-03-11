@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle, Star } from 'lucide-react'
 import { sessionApi, evalApi, submissionApi, questionApi } from '../../api'
+import QuestionViewer from '../../components/QuestionViewer'
 import type { Session, Question, QuestionSet } from '../../types'
 
 export default function PeerEvalPage() {
@@ -106,25 +107,28 @@ export default function PeerEvalPage() {
           <button className="btn-secondary text-sm" onClick={() => { setCurrentTask(null); setSubmission(null); setQSet(null) }}>← 返回</button>
         </div>
 
-        {/* 显示对方答题内容 */}
+        {/* 显示对方完整答卷 */}
         {qSet?.questions && submission && (
-          <div className="space-y-4 mb-6">
+          <div className="space-y-3 mb-6">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">完整答卷</h3>
             {qSet.questions.map((q: Question) => {
-              const ans = submission.answers?.[q.id]
+              const studentAns = submission.answers?.[q.id]
+              const correctAns = q.answer
               return (
-                <div key={q.id} className="card">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="badge-gray font-mono">{q.question_no}</span>
-                    <span className="text-sm text-gray-500">{q.type}</span>
-                  </div>
-                  <p className="text-gray-800 mb-2">{q.content}</p>
-                  <div className="p-2 bg-blue-50 rounded-lg text-sm text-blue-700 font-medium">
-                    答案：{ans !== undefined ? String(ans) : <span className="text-gray-400">未作答</span>}
-                  </div>
-                </div>
+                <QuestionViewer
+                  key={q.id}
+                  question={q}
+                  answer={studentAns}
+                  readonly={true}
+                  showCorrect={true}
+                  correctAnswer={correctAns}
+                />
               )
             })}
           </div>
+        )}
+        {qSet?.questions && !submission && (
+          <div className="card text-center text-gray-400 py-6 mb-6">该同学尚未作答</div>
         )}
 
         {/* 打分区域 */}

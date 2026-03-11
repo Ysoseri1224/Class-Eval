@@ -221,15 +221,15 @@ router.get('/sessions/:session_id/peer-eval/my-result', authMiddleware, requireR
   const session_id = req.params.session_id;
   const student_id = req.user.id;
 
-  // 获取所有评给我的分数（已提交）
-  const scores = db.prepare(`
-    SELECT score FROM peer_eval_assignments
+  // 获取所有评给我的记录（已提交），包含评语
+  const records = db.prepare(`
+    SELECT score, comment FROM peer_eval_assignments
     WHERE session_id = ? AND reviewee_id = ? AND status = 'submitted'
   `).all(session_id, student_id);
 
-  if (scores.length === 0) return res.json({ grade: null, message: '暂无互评结果' });
+  if (records.length === 0) return res.json({ grade: null, avg_score: null, records: [], message: '暂无互评结果' });
 
-  const avgPeerScore = scores.reduce((sum, s) => sum + s.score, 0) / scores.length;
+  const avgPeerScore = records.reduce((sum, s) => sum + s.score, 0) / records.length;
 
   // 获取答题得分
   const sub = db.prepare(
@@ -243,7 +243,7 @@ router.get('/sessions/:session_id/peer-eval/my-result', authMiddleware, requireR
   if (totalRatio >= 0.85) grade = 'A';
   else if (totalRatio >= 0.75) grade = 'B';
 
-  res.json({ grade, exam_score: examScore, peer_score: avgPeerScore, ratio: totalRatio });
+  res.json({ grade, exam_score: examScore, avg_score: avgPeerScore, records, ratio: totalRatio });
 });
 
 // 获取学生自评+互评综合等级

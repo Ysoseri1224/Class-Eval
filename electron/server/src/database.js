@@ -127,6 +127,7 @@ db.exec(`
     reviewer_id INTEGER NOT NULL REFERENCES users(id),
     reviewee_id INTEGER NOT NULL REFERENCES users(id),
     score REAL,
+    comment TEXT,
     submitted_at DATETIME,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'submitted')),
     UNIQUE(session_id, reviewer_id, reviewee_id)

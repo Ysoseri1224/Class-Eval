@@ -1,11 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
-import { CheckCircle, XCircle, Clock } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Clock, Camera } from 'lucide-react'
+import html2canvas from 'html2canvas'
 import { sessionApi, questionApi, submissionApi } from '../../api'
+import QuestionViewer from '../../components/QuestionViewer'
 import type { Session, Question, QuestionSet } from '../../types'
-
-const TYPE_LABELS: Record<string, string> = {
-  choice: '选择题', judge: '判断题', fill: '填空题', match: '连线题'
-}
 
 export default function ExamPage() {
   const [sessions, setSessions] = useState<Session[]>([])
@@ -18,6 +16,9 @@ export default function ExamPage() {
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [attachments, setAttachments] = useState<Record<string, string[]>>({})
+  const [screenshotModal, setScreenshotModal] = useState<string | null>(null)
+  const examRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     sessionApi.active().then((data: any) => setSessions(data)).catch(() => {})
@@ -32,7 +33,17 @@ export default function ExamPage() {
       // 加载已有答题记录
       const sub: any = await submissionApi.my(s.id)
       if (sub) {
-        setAnswers(sub.answers || {})
+        const savedAnswers = sub.answers || {}
+        setAnswers(savedAnswers)
+        // 恢复附件（存在 answers 里以 __attach_qid 为 key）
+        const savedAttachments: Record<string, string[]> = {}
+        for (const key of Object.keys(savedAnswers)) {
+          if (key.startsWith('__attach_')) {
+            const qid = key.replace('__attach_', '')
+            savedAttachments[qid] = savedAnswers[key]
+          }
+        }
+        setAttachments(savedAttachments)
         if (sub.status === 'submitted') {
           setSubmitted(true)
           setScore(sub.score)
@@ -57,239 +68,73 @@ export default function ExamPage() {
   }, [timeLeft, submitted])
 
   const setAnswer = (qId: number, val: any) => {
-    setAnswers(prev => ({ ...prev, [qId]: val }))
-    // 自动保存
-    if (selectedSession) {
-      submissionApi.save(selectedSession.id, { ...answers, [qId]: val }).catch(() => {})
-    }
+    setAnswers(prev => {
+      const next = { ...prev, [qId]: val }
+      if (selectedSession) {
+        submissionApi.save(selectedSession.id, next).catch(() => {})
+      }
+      return next
+    })
+  }
+
+  const setQuestionAttachments = (qId: number, urls: string[]) => {
+    setAttachments(prev => {
+      const next = { ...prev, [qId]: urls }
+      // 把附件 URL 也存到 answers（以 __attach_qid 为 key），确保自动保存
+      if (selectedSession) {
+        const attachKey = `__attach_${qId}`
+        submissionApi.save(selectedSession.id, { ...answers, [attachKey]: urls }).catch(() => {})
+      }
+      return next
+    })
   }
 
   const handleSubmit = useCallback(async () => {
     if (!selectedSession || submitted || submitting) return
     setSubmitting(true)
     try {
-      const res: any = await submissionApi.submit(selectedSession.id, answers)
+      // 提交时合并附件信息
+      const attachKeys: Record<string, any> = {}
+      for (const [qId, urls] of Object.entries(attachments)) {
+        attachKeys[`__attach_${qId}`] = urls
+      }
+      const res: any = await submissionApi.submit(selectedSession.id, { ...answers, ...attachKeys })
       setScore(res.score)
       setResults(res.questionResults)
       setSubmitted(true)
     } catch (e: any) {
       alert(e.message)
     } finally { setSubmitting(false) }
-  }, [selectedSession, submitted, submitting, answers])
+  }, [selectedSession, submitted, submitting, answers, attachments])
+
+  const handleScreenshot = async () => {
+    if (!examRef.current) return
+    try {
+      const canvas = await html2canvas(examRef.current, { scale: 1.5, useCORS: true })
+      const dataUrl = canvas.toDataURL('image/png')
+
+      // 方案C：复制到剪贴板
+      canvas.toBlob(async (blob) => {
+        if (blob && navigator.clipboard?.write) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+          } catch { /* 不支持则跳过 */ }
+        }
+      })
+
+      // 方案A：触发下载
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `答题截图_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`
+      a.click()
+
+      setScreenshotModal(dataUrl)
+    } catch (e) {
+      alert('截图失败，请重试')
+    }
+  }
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
-
-  // 连线题：当前选中的左侧项
-  const [matchSelected, setMatchSelected] = useState<Record<number, string | null>>({})
-
-  const handleMatchLeft = (qId: number, leftId: string) => {
-    setMatchSelected(prev => ({ ...prev, [qId]: prev[qId] === leftId ? null : leftId }))
-  }
-
-  const handleMatchRight = (qId: number, rightId: string) => {
-    const leftId = matchSelected[qId]
-    if (!leftId) return
-    const newAns = { ...(answers[qId] || {}), [leftId]: rightId }
-    setMatchSelected(prev => ({ ...prev, [qId]: null }))
-    setAnswer(qId, newAns)
-  }
-
-  const clearMatchPair = (qId: number, leftId: string) => {
-    const newAns = { ...(answers[qId] || {}) }
-    delete newAns[leftId]
-    setAnswer(qId, newAns)
-  }
-
-  // 渲染单道题
-  const renderQuestion = (q: Question, idx: number) => {
-    const ans = answers[q.id]
-    const result = results[q.id]
-
-    return (
-      <div key={q.id} className={`card border-2 transition-colors ${submitted && result ? (result.correct ? 'border-green-300 bg-green-50' : 'border-red-200 bg-red-50') : 'border-transparent'}`}>
-        <div className="flex items-start gap-3 mb-4">
-          <span className="bg-blue-100 text-blue-700 text-xs font-mono px-2 py-0.5 rounded shrink-0 mt-0.5">{q.question_no}</span>
-          <div className="flex-1">
-            <span className="badge-gray text-xs mr-2">{TYPE_LABELS[q.type]}</span>
-            <p className="text-gray-800 font-medium mt-1">{q.content}</p>
-          </div>
-          {submitted && result && (
-            <div className="shrink-0">
-              {result.correct
-                ? <CheckCircle className="w-6 h-6 text-green-500" />
-                : <XCircle className="w-6 h-6 text-red-500" />
-              }
-            </div>
-          )}
-        </div>
-
-        {/* 选择题 */}
-        {q.type === 'choice' && (
-          <div className="space-y-2 ml-10">
-            {(['A', 'B', 'C', 'D'] as const).map((letter, i) => {
-              const opt = (q.options as string[])?.[i]
-              if (!opt) return null
-              const isSelected = ans === letter
-              const isCorrect = submitted && result?.correctAnswer === letter
-              const isWrong = submitted && isSelected && !result?.correct
-              return (
-                <label key={letter} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer border transition-colors ${isCorrect ? 'bg-green-100 border-green-400' : isWrong ? 'bg-red-100 border-red-400' : isSelected ? 'bg-blue-50 border-blue-400' : 'bg-white border-gray-200 hover:bg-gray-50'} ${submitted ? 'cursor-default' : ''}`}>
-                  <input type="radio" name={`q_${q.id}`} value={letter} checked={isSelected} onChange={() => !submitted && setAnswer(q.id, letter)} disabled={submitted} className="shrink-0" />
-                  <span className="font-medium text-gray-500 w-4">{letter}.</span>
-                  <span className="text-gray-700">{opt}</span>
-                </label>
-              )
-            })}
-            {submitted && !result?.correct && (
-              <p className="text-sm text-green-600 mt-2 ml-3">✓ 正确答案：{String(result?.correctAnswer)}</p>
-            )}
-          </div>
-        )}
-
-        {/* 判断题 */}
-        {q.type === 'judge' && (
-          <div className="flex gap-4 ml-10">
-            {[{ val: 'true', label: '✓ 正确' }, { val: 'false', label: '✗ 错误' }].map(({ val, label }) => {
-              const isSelected = String(ans) === val
-              const isCorrect = submitted && String(result?.correctAnswer) === val
-              const isWrong = submitted && isSelected && !result?.correct
-              return (
-                <label key={val} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border cursor-pointer transition-colors ${isCorrect ? 'bg-green-100 border-green-400' : isWrong ? 'bg-red-100 border-red-400' : isSelected ? 'bg-blue-50 border-blue-400' : 'bg-white border-gray-200 hover:bg-gray-50'} ${submitted ? 'cursor-default' : ''}`}>
-                  <input type="radio" name={`q_${q.id}`} value={val} checked={isSelected} onChange={() => !submitted && setAnswer(q.id, val)} disabled={submitted} />
-                  <span className="font-medium">{label}</span>
-                </label>
-              )
-            })}
-            {submitted && !result?.correct && (
-              <p className="text-sm text-green-600 self-center">✓ 正确答案：{result?.correctAnswer === 'true' ? '正确' : '错误'}</p>
-            )}
-          </div>
-        )}
-
-        {/* 填空题 */}
-        {q.type === 'fill' && (
-          <div className="ml-10">
-            <input
-              className={`input ${submitted && result ? (result.correct ? 'border-green-400 bg-green-50' : 'border-red-400 bg-red-50') : ''}`}
-              value={ans || ''}
-              onChange={e => !submitted && setAnswer(q.id, e.target.value)}
-              disabled={submitted}
-              placeholder="请输入答案"
-            />
-            {submitted && !result?.correct && (
-              <p className="text-sm text-green-600 mt-2">✓ 正确答案：{String(result?.correctAnswer)}</p>
-            )}
-          </div>
-        )}
-
-        {/* 连线题 */}
-        {q.type === 'match' && (() => {
-          const opts = q.options as { left: {id:string;text:string;image?:string}[]; right: {id:string;text:string;image?:string}[] }
-          if (!opts?.left) return null
-          const userAns: Record<string,string> = ans || {}
-          const correctAns: Record<string,string> = result?.correctAnswer || {}
-          const selectedLeft = matchSelected[q.id] || null
-
-          const COLORS = ['blue','green','purple','orange','pink','teal']
-          const colorMap: Record<string,string> = {}
-          opts.left.forEach((l,i) => { if (userAns[l.id]) colorMap[l.id] = COLORS[i % COLORS.length] })
-
-          const clsMap: Record<string,{bg:string;border:string;text:string}> = {
-            blue:  {bg:'bg-blue-100',  border:'border-blue-400',  text:'text-blue-700'},
-            green: {bg:'bg-green-100', border:'border-green-400', text:'text-green-700'},
-            purple:{bg:'bg-purple-100',border:'border-purple-400',text:'text-purple-700'},
-            orange:{bg:'bg-orange-100',border:'border-orange-400',text:'text-orange-700'},
-            pink:  {bg:'bg-pink-100',  border:'border-pink-400',  text:'text-pink-700'},
-            teal:  {bg:'bg-teal-100',  border:'border-teal-400',  text:'text-teal-700'},
-          }
-
-          return (
-            <div className="ml-6">
-              {!submitted && (
-                <p className="text-xs text-blue-500 mb-2">
-                  {selectedLeft ? '再点右侧项完成配对 （再次点击左侧项可取消）' : '点击左侧项，再点右侧项完成配对'}
-                </p>
-              )}
-              <div className="grid grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  {opts.left.map(l => {
-                    const paired = userAns[l.id]
-                    const color = colorMap[l.id]
-                    const cls = color ? clsMap[color] : null
-                    const isSelected = selectedLeft === l.id
-                    const isCorrect = submitted && correctAns[l.id] && userAns[l.id] === correctAns[l.id]
-                    const isWrong = submitted && userAns[l.id] && userAns[l.id] !== correctAns[l.id]
-                    return (
-                      <div key={l.id}
-                        onClick={() => !submitted && handleMatchLeft(q.id, l.id)}
-                        className={`flex items-center gap-2 p-2.5 rounded-lg border-2 transition-all
-                          ${submitted
-                            ? isCorrect ? 'border-green-400 bg-green-50'
-                              : isWrong  ? 'border-red-400 bg-red-50'
-                              : 'border-gray-200 bg-white'
-                            : isSelected ? 'border-blue-500 bg-blue-100 ring-2 ring-blue-300'
-                              : cls ? `${cls.bg} ${cls.border}`
-                              : 'border-gray-200 bg-white hover:bg-gray-50'
-                          }
-                          ${!submitted ? 'cursor-pointer' : ''}
-                        `}
-                      >
-                        {l.image && <img src={l.image} alt="" className="h-10 w-10 object-contain rounded shrink-0" />}
-                        <span className="text-sm flex-1">{l.text}</span>
-                        {paired && !submitted && (
-                          <button className="text-gray-400 hover:text-red-500 text-xs shrink-0" onClick={e => { e.stopPropagation(); clearMatchPair(q.id, l.id) }}>×</button>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-                <div className="space-y-2">
-                  {opts.right.map(r => {
-                    const pairedLeftId = Object.keys(userAns).find(k => userAns[k] === r.id)
-                    const color = pairedLeftId ? colorMap[pairedLeftId] : null
-                    const cls = color ? clsMap[color] : null
-                    const isCorrect = submitted && Object.entries(correctAns).some(([lId, rId]) => rId === r.id && userAns[lId] === rId)
-                    const isWrong = submitted && pairedLeftId && userAns[pairedLeftId] !== correctAns[pairedLeftId]
-                    return (
-                      <div key={r.id}
-                        onClick={() => !submitted && handleMatchRight(q.id, r.id)}
-                        className={`flex items-center gap-2 p-2.5 rounded-lg border-2 transition-all
-                          ${submitted
-                            ? isCorrect ? 'border-green-400 bg-green-50'
-                              : isWrong  ? 'border-red-400 bg-red-50'
-                              : 'border-gray-200 bg-white'
-                            : cls ? `${cls.bg} ${cls.border}`
-                              : selectedLeft ? 'border-gray-200 bg-white hover:border-blue-400 hover:bg-blue-50 cursor-pointer'
-                              : 'border-gray-200 bg-white'
-                          }
-                        `}
-                      >
-                        {r.image && <img src={r.image} alt="" className="h-10 w-10 object-contain rounded shrink-0" />}
-                        <span className="text-sm flex-1">{r.text}</span>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-              {submitted && !result?.correct && (
-                <div className="mt-3 p-2.5 bg-green-50 rounded-lg border border-green-200">
-                  <p className="text-xs font-semibold text-green-700 mb-1">✓ 正确配对：</p>
-                  {Object.entries(correctAns).map(([lId, rId]) => {
-                    const lItem = opts.left.find(l => l.id === lId)
-                    const rItem = opts.right.find(r => r.id === rId)
-                    return lItem && rItem ? (
-                      <p key={lId} className="text-xs text-green-600">{lItem.text} → {rItem.text}</p>
-                    ) : null
-                  })}
-                </div>
-              )}
-            </div>
-          )
-        })()}
-
-      </div>
-    )
-  }
 
   if (!selectedSession) {
     return (
@@ -337,8 +182,15 @@ export default function ExamPage() {
               {formatTime(timeLeft)}
             </div>
           )}
-          <button className="btn-secondary text-sm" onClick={() => { setSelectedSession(null); setQSet(null); setAnswers({}); setSubmitted(false); setResults({}); setScore(null); setTimeLeft(null) }}>
+          <button className="btn-secondary text-sm" onClick={() => { setSelectedSession(null); setQSet(null); setAnswers({}); setAttachments({}); setSubmitted(false); setResults({}); setScore(null); setTimeLeft(null) }}>
             返回列表
+          </button>
+          <button
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-50"
+            onClick={handleScreenshot}
+            title="截图保存"
+          >
+            <Camera className="w-4 h-4" />截图
           </button>
           {!submitted && selectedSession.exam_open && (
             <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
@@ -348,9 +200,21 @@ export default function ExamPage() {
         </div>
       </div>
 
+      <div ref={examRef}>
       {qSet?.questions && qSet.questions.length > 0 ? (
         <div className="space-y-4">
-          {qSet.questions.map((q, idx) => renderQuestion(q, idx))}
+          {qSet.questions.map((q: Question) => (
+            <QuestionViewer
+              key={q.id}
+              question={q}
+              answer={answers[q.id]}
+              result={results[q.id]}
+              readonly={submitted || !selectedSession.exam_open}
+              onAnswer={val => setAnswer(q.id, val)}
+              attachments={attachments[String(q.id)]}
+              onAttachmentsChange={q.type === 'fill' ? (urls) => setQuestionAttachments(q.id, urls) : undefined}
+            />
+          ))}
           {!submitted && selectedSession.exam_open && (
             <div className="flex justify-end pt-2">
               <button className="btn-primary px-8" onClick={handleSubmit} disabled={submitting}>
@@ -368,6 +232,21 @@ export default function ExamPage() {
         </div>
       ) : (
         <div className="text-center py-16 text-gray-400">该课堂暂无题目</div>
+      )}
+      </div>
+
+      {/* 截图弹窗 */}
+      {screenshotModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setScreenshotModal(null)}>
+          <div className="bg-white rounded-2xl p-4 max-w-lg w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="font-semibold text-gray-800">截图已保存到下载文件夹</p>
+              <button className="text-gray-400 hover:text-gray-600 text-xl" onClick={() => setScreenshotModal(null)}>×</button>
+            </div>
+            <img src={screenshotModal} alt="截图预览" className="w-full rounded-lg border border-gray-200 mb-3" />
+            <p className="text-xs text-gray-400 text-center">图片已复制到剪贴板，也已自动下载到「下载」文件夹</p>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -1,6 +1,6 @@
 {
   "name": "classroom-eval",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "课堂评测系统",
   "main": "main.js",
   "scripts": {

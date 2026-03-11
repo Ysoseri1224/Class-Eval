@@ -63,6 +63,12 @@ router.post('/:session_id/submit', authMiddleware, requireRole('student'), (req,
       correct = String(studentAnswer) === String(correctAnswer);
     } else if (q.type === 'fill') {
       correct = String(studentAnswer || '').trim() === String(correctAnswer).trim();
+    } else if (q.type === 'match') {
+      // 连线题：所有配对都正确才得分
+      if (studentAnswer && typeof studentAnswer === 'object' && typeof correctAnswer === 'object') {
+        const keys = Object.keys(correctAnswer);
+        correct = keys.length > 0 && keys.every(k => studentAnswer[k] === correctAnswer[k]);
+      }
     }
 
     if (correct) totalScore += scorePerQuestion;
@@ -136,6 +142,11 @@ router.get('/session/:session_id', authMiddleware, requireRole('admin', 'teacher
         correct = String(studentAnswer) === String(correctAnswer);
       } else if (q.type === 'fill') {
         correct = String(studentAnswer || '').trim() === String(correctAnswer).trim();
+      } else if (q.type === 'match') {
+        if (studentAnswer && typeof studentAnswer === 'object' && typeof correctAnswer === 'object') {
+          const keys = Object.keys(correctAnswer);
+          correct = keys.length > 0 && keys.every(k => studentAnswer[k] === correctAnswer[k]);
+        }
       }
       if (correct) correctCount++;
     }

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, shell, dialog } = require('electron')
 const path = require('path')
 const os = require('os')
+const { exec } = require('child_process')
 
 let tray = null
 let win = null
@@ -109,10 +110,20 @@ function createTray() {
   tray.on('double-click', () => { win ? win.show() : createWindow() })
 }
 
+function addFirewallRule() {
+  const ruleName = '课堂评测系统-3001'
+  const cmd = `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=3001`
+  exec(cmd, (err) => {
+    if (err) console.log('防火墙规则已存在或无管理员权限，跳过:', err.message)
+    else console.log('防火墙规则添加成功')
+  })
+}
+
 app.whenReady().then(() => {
   startServer()
   createWindow()
   createTray()
+  addFirewallRule()
 })
 
 app.on('window-all-closed', (e) => {
