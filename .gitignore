@@ -13,6 +13,10 @@ electron/dist-exe/
 server/data/
 electron/server/data/
 
+# 用户上传文件
+uploads/
+server/uploads/
+
 # 日志
 *.log
 npm-debug.log*
