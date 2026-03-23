@@ -1,0 +1,171 @@
+name: Release Windows EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version in x.y.z format
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG_NAME: v${{ inputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $version = "${env:VERSION}"
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Version must match x.y.z, got: $version"
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: yarn
+          cache-dependency-path: |
+            client/yarn.lock
+            server/yarn.lock
+            electron/yarn.lock
+
+      - name: Prepare release source
+        id: release_source
+        shell: pwsh
+        run: |
+          $tag = "${env:TAG_NAME}"
+          git fetch --force --tags origin
+
+          $existingTag = git tag -l $tag
+          if ($existingTag) {
+            git checkout $tag
+            $releaseSha = git rev-parse HEAD
+            "release_sha=$releaseSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "tag_exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            exit 0
+          }
+
+          $packagePath = "electron/package.json"
+          $packageJson = Get-Content $packagePath -Raw | ConvertFrom-Json
+          $packageJson.version = "${env:VERSION}"
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content $packagePath -Encoding utf8NoBOM
+
+          git diff --quiet -- $packagePath
+          if ($LASTEXITCODE -ne 0) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add $packagePath
+            git commit -m "release: ${env:TAG_NAME}"
+          }
+
+          $releaseSha = git rev-parse HEAD
+          "release_sha=$releaseSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag_exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Install client dependencies
+        working-directory: client
+        shell: pwsh
+        run: yarn install --frozen-lockfile
+
+      - name: Install server dependencies
+        working-directory: server
+        shell: pwsh
+        run: yarn install --frozen-lockfile
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        shell: pwsh
+        run: yarn install --frozen-lockfile
+
+      - name: Build client
+        working-directory: client
+        shell: pwsh
+        run: yarn build
+
+      - name: Stage Electron application files
+        shell: pwsh
+        run: |
+          $electronDir = Join-Path $PWD "electron"
+          $serverStageDir = Join-Path $electronDir "server"
+          $clientDistDir = Join-Path $electronDir "client-dist"
+          $distExeDir = Join-Path $electronDir "dist-exe"
+
+          if (Test-Path $clientDistDir) { Remove-Item $clientDistDir -Recurse -Force }
+          if (Test-Path $serverStageDir) { Remove-Item $serverStageDir -Recurse -Force }
+          if (Test-Path $distExeDir) { Remove-Item $distExeDir -Recurse -Force }
+
+          New-Item -ItemType Directory -Path (Join-Path $serverStageDir "src") -Force | Out-Null
+
+          Copy-Item "client/dist" $clientDistDir -Recurse
+          Copy-Item "server/src/*" (Join-Path $serverStageDir "src") -Recurse
+          Copy-Item "server/package.json" (Join-Path $serverStageDir "package.json")
+          Copy-Item "server/node_modules" (Join-Path $serverStageDir "node_modules") -Recurse
+
+      - name: Read Electron runtime version
+        id: electron_version
+        shell: pwsh
+        run: |
+          $packageJson = Get-Content "electron/package.json" -Raw | ConvertFrom-Json
+          $electronVersion = [string]$packageJson.devDependencies.electron
+          $electronVersion = $electronVersion -replace '^[^\d]+', ''
+          "value=$electronVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Rebuild better-sqlite3 for Electron
+        working-directory: electron
+        shell: pwsh
+        run: |
+          node -e "const path = require('node:path'); const { rebuild } = require('@electron/rebuild'); rebuild({ buildPath: path.resolve('server'), electronVersion: '${{ steps.electron_version.outputs.value }}', onlyModules: ['better-sqlite3'], force: true }).catch((error) => { console.error(error); process.exit(1); });"
+
+      - name: Build Windows installer
+        working-directory: electron
+        shell: pwsh
+        run: yarn build
+
+      - name: Ensure release tag exists on origin
+        shell: pwsh
+        run: |
+          $tag = "${env:TAG_NAME}"
+          $releaseSha = "${{ steps.release_source.outputs.release_sha }}"
+          git fetch --force --tags origin
+
+          $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
+          if (-not $remoteTag) {
+            git tag $tag $releaseSha
+            git push origin $tag
+          }
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = "${env:TAG_NAME}"
+          $releaseSha = "${{ steps.release_source.outputs.release_sha }}"
+          $assets = Get-ChildItem "electron/dist-exe/*.exe" | ForEach-Object { $_.FullName }
+
+          if (-not $assets -or $assets.Count -eq 0) {
+            throw "No EXE artifacts found in electron/dist-exe"
+          }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $assets --clobber
+          } else {
+            gh release create $tag $assets --title $tag --generate-notes --target $releaseSha
+          }
